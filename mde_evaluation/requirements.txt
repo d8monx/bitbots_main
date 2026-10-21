@@ -1,0 +1,22 @@
+# Offline evaluation for the MDE project (runs on macOS/Apple Silicon and Linux)
+torch
+torchvision
+mujoco
+numpy<2
+opencv-python
+matplotlib
+pillow
+einops
+huggingface_hub
+safetensors
+omegaconf
+imageio
+typer
+requests
+plyfile
+trimesh
+moviepy==1.0.3
+addict
+pycolmap
+evo
+scipy

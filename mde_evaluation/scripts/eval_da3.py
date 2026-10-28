@@ -11,8 +11,8 @@ from pathlib import Path
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 from depth_anything_3.api import DepthAnything3
+from gpu import free_memory, pick_device, sync
 
 ROOT = Path(__file__).resolve().parents[1]
 SIM = ROOT / "data/sim"
@@ -35,7 +35,7 @@ def metrics(pred, gt, mask):
 def main():
     OUT.mkdir(exist_ok=True)
     K = json.loads((SIM / "intrinsics.json").read_text())
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    device = pick_device()
     images = [cv2.cvtColor(cv2.imread(str(SIM / f"{v}_rgb.png")), cv2.COLOR_BGR2RGB) for v in VIEWS]
     gts = [np.load(SIM / f"{v}_depth.npy") for v in VIEWS]
     rows, preds = [], {}
@@ -45,12 +45,10 @@ def main():
         is_metric = "METRIC" in name
         model.inference([images[0]])  # warm-up
         for view, img, gt in zip(VIEWS, images, gts):
-            if device.type == "mps":
-                torch.mps.synchronize()
+            sync(device)
             t0 = time.perf_counter()
             pred = model.inference([img])
-            if device.type == "mps":
-                torch.mps.synchronize()
+            sync(device)
             ms = (time.perf_counter() - t0) * 1000
             raw = pred.depth[0]
             ph, pw = raw.shape
@@ -68,8 +66,7 @@ def main():
             preds[(name, view)] = depth * scale
             print(rows[-1])
         del model
-        if device.type == "mps":
-            torch.mps.empty_cache()
+        free_memory(device)
 
     (OUT / "sim_metrics.json").write_text(json.dumps(rows, indent=2))
 

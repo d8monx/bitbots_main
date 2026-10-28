@@ -16,8 +16,8 @@ from pathlib import Path
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 from depth_anything_3.api import DepthAnything3
+from gpu import free_memory, pick_device, sync
 from eval_da3 import MAX_DEPTH, MODELS, metrics
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,7 +59,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     K = json.loads((args.frames / "intrinsics.json").read_text())
     frames = json.loads((args.frames / "frames.json").read_text())
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    device = pick_device()
 
     images, gts, pitches = [], [], []
     for f in frames:
@@ -98,8 +98,7 @@ def main():
             preds[(short, i)] = depth * scale
         print(f"{short}: {1000 * np.mean(times):.0f} ms per frame")
         del model
-        if device.type == "mps":
-            torch.mps.empty_cache()
+        free_memory(device)
 
     (out / "metrics.json").write_text(json.dumps(rows, indent=1))
 

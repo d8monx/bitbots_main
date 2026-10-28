@@ -14,6 +14,9 @@ uv pip install --python .venv/bin/python -r requirements.txt
 uv pip install --python .venv/bin/python --no-deps "depth-anything-3 @ git+https://github.com/ByteDance-Seed/Depth-Anything-3"
 ```
 
+On Linux with an NVIDIA GPU, install DA3 with its dependencies instead (drop `--no-deps`); xformers is available there.
+The scripts pick the device automatically (`scripts/gpu.py`): NVIDIA GPU (CUDA), then Apple GPU (MPS), then CPU.
+
 ## Run
 
 ```bash

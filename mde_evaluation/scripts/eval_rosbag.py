@@ -133,7 +133,51 @@ def main():
     fig.tight_layout()
     fig.savefig(out / "comparison.png", dpi=100)
 
-    # Figure 2: how far off is the raw metric model, depending on how steeply the camera looks down
+    # Figure 2: signed relative error per pixel, (model - ground plane) / ground plane.
+    # Red = model too far, blue = model too near, white = correct or not evaluated (not field).
+    fig, axes = plt.subplots(len(shown), 1 + len(MODELS), figsize=(4 * (1 + len(MODELS)) + 1.5, 2.4 * len(shown)),
+                             layout="constrained")
+    fig.suptitle("Error vs. ground plane (ground-scaled, field pixels only)")
+    for r, i in enumerate(shown):
+        axes[r, 0].imshow(images[i])
+        axes[r, 0].set_ylabel(frames[i]["file"])
+        for c, short in enumerate(shorts):
+            err = (preds[(short, i)] - gts[i]) / gts[i]
+            im = axes[r, 1 + c].imshow(err, cmap="RdBu_r", vmin=-0.3, vmax=0.3)
+        for ax in axes[r]:
+            ax.set_xticks([]), ax.set_yticks([])
+    for c, title in enumerate(["RGB"] + shorts):
+        axes[0, c].set_title(title)
+    fig.colorbar(im, ax=axes, shrink=0.8, label="red: too far, blue: too near", format="{x:+.0%}")
+    fig.savefig(out / "error_maps.png", dpi=100)
+
+    # Figure 3: signed relative error over distance, all frames and field pixels.
+    # A constant offset means a pure scale error; a slope means the error grows with distance.
+    edges = np.arange(0.0, MAX_DEPTH + 0.5, 0.5)
+    fig, ax = plt.subplots(figsize=(7, 4))
+    for short in shorts:
+        gt_all = np.concatenate([gts[i][np.isfinite(gts[i])] for i in range(len(gts)) if (short, i) in preds])
+        pr_all = np.concatenate([preds[(short, i)][np.isfinite(gts[i])] for i in range(len(gts)) if (short, i) in preds])
+        err = (pr_all - gt_all) / gt_all
+        idx = np.digitize(gt_all, edges)
+        centers, med, q25, q75 = [], [], [], []
+        for b in range(1, len(edges)):
+            e = err[idx == b]
+            if e.size > 1000:  # skip distances with too few pixels
+                centers.append((edges[b - 1] + edges[b]) / 2)
+                med.append(np.median(e)), q25.append(np.percentile(e, 25)), q75.append(np.percentile(e, 75))
+        line, = ax.plot(centers, med, marker="o", ms=3, label=short)
+        ax.fill_between(centers, q25, q75, color=line.get_color(), alpha=0.15)
+    ax.axhline(0.0, color="gray", lw=1)
+    ax.set_xlabel("ground-plane depth [m]")
+    ax.set_ylabel("relative error (median, band: middle 50 %)")
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:+.0%}"))
+    ax.set_title("Ground-scaled models vs. ground plane")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(out / "error_vs_distance.png", dpi=100)
+
+    # Figure 4: how far off is the raw metric model, depending on how steeply the camera looks down
     raw = [r for r in rows if r["variant"] == "raw"]
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.scatter([r["pitch"] for r in raw], [1 / r["scale"] for r in raw])

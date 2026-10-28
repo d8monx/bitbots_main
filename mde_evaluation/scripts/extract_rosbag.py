@@ -1,6 +1,7 @@
 """Extract camera frames, intrinsics and camera poses from a rosbag (no ROS needed).
 
 Usage: python scripts/extract_rosbag.py data/rosbags/<bag> [--step 1.0]
+       (<bag> may also be a single .mcap file inside data/rosbags/<bag>/)
 Writes data/frames/<bag>/frame_XXXX.png, intrinsics.json and frames.json.
 frames.json holds per frame the 4x4 pose of the camera optical frame in base_footprint
 (the point on the ground below the robot), which we need for ground-plane depth.
@@ -56,7 +57,8 @@ def main():
     parser.add_argument("bag", type=Path)
     parser.add_argument("--step", type=float, default=1.0, help="seconds between extracted frames")
     args = parser.parse_args()
-    out = ROOT / "data/frames" / args.bag.name
+    # A bag folder, or a single .mcap file (e.g. copied without metadata.yaml): name the output after the folder
+    out = ROOT / "data/frames" / (args.bag.parent.name if args.bag.is_file() else args.bag.name)
     out.mkdir(parents=True, exist_ok=True)
 
     parents = {}  # child frame -> (parent frame, latest 4x4 pose of child in parent)

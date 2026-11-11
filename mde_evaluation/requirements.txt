@@ -20,3 +20,4 @@ addict
 pycolmap
 evo
 scipy
+rosbags

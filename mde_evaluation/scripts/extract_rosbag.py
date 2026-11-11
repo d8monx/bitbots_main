@@ -1,8 +1,10 @@
-"""Extract camera frames, intrinsics and camera poses from a rosbag (no ROS needed).
+"""Extract camera frames, intrinsics, camera poses and ZED depth from a rosbag (no ROS needed).
 
 Usage: python scripts/extract_rosbag.py data/rosbags/<bag> [--step 1.0]
        (<bag> may also be a single .mcap file inside data/rosbags/<bag>/)
 Writes data/frames/<bag>/frame_XXXX.png, intrinsics.json and frames.json.
+If the bag has ZED depth, also zed_depth_XXXX.npy (metres, float32, NaN/inf = no value) and
+zed_conf_XXXX.npy (ZED confidence, 1 = most confident ... 100 = least) for the frame with the same stamp.
 frames.json holds per frame the 4x4 pose of the camera optical frame in base_footprint
 (the point on the ground below the robot), which we need for ground-plane depth.
 """
@@ -20,6 +22,8 @@ from scipy.spatial.transform import Rotation
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE = "/zed/zed_node/rgb/image_rect_color"
 INFO = "/zed/zed_node/rgb/camera_info"
+DEPTH = "/zed/zed_node/depth/depth_registered"
+CONF = "/zed/zed_node/confidence/confidence_map"
 GROUND = "base_footprint"
 
 
@@ -52,6 +56,15 @@ def lookup(target: str, source: str, parents: dict) -> np.ndarray:
     return np.linalg.inv(T_root_target) @ T_root_source
 
 
+def to_float_image(msg) -> np.ndarray:
+    assert msg.encoding == "32FC1", msg.encoding
+    return np.frombuffer(msg.data, np.float32).reshape(msg.height, msg.width).copy()
+
+
+def stamp_ns(msg) -> int:
+    return msg.header.stamp.sec * 10**9 + msg.header.stamp.nanosec
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("bag", type=Path)
@@ -63,12 +76,16 @@ def main():
 
     parents = {}  # child frame -> (parent frame, latest 4x4 pose of child in parent)
     frames, intrinsics, next_t = [], None, None
+    zed = {DEPTH: {}, CONF: {}}  # topic -> header stamp (ns) -> (connection, raw message)
     with AnyReader([args.bag], default_typestore=get_typestore(Stores.ROS2_JAZZY)) as reader:
-        conns = [c for c in reader.connections if c.topic in (IMAGE, INFO, "/tf", "/tf_static")]
+        conns = [c for c in reader.connections if c.topic in (IMAGE, INFO, DEPTH, CONF, "/tf", "/tf_static")]
         for conn, t, raw in reader.messages(connections=conns):  # in time order
             if conn.topic in ("/tf", "/tf_static"):
                 for tf in reader.deserialize(raw, conn.msgtype).transforms:
                     parents[tf.child_frame_id] = (tf.header.frame_id, to_matrix(tf))
+            elif conn.topic in zed:
+                # keep raw; only the frames we extract are decoded later
+                zed[conn.topic][stamp_ns(reader.deserialize(raw, conn.msgtype))] = (conn, raw)
             elif conn.topic == INFO and intrinsics is None:
                 info = reader.deserialize(raw, conn.msgtype)
                 k = info.k
@@ -85,7 +102,20 @@ def main():
                 name = f"frame_{len(frames):04d}.png"
                 Image.fromarray(bgra[..., 2::-1]).save(out / name)  # BGRA -> RGB
                 stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-                frames.append({"file": name, "stamp": round(stamp, 3), "T_ground_camera": T.round(6).tolist()})
+                frames.append({"file": name, "stamp": round(stamp, 3), "stamp_ns": stamp_ns(msg),
+                               "T_ground_camera": T.round(6).tolist()})
+
+        # ZED depth and confidence with the same header stamp as the image (nearest within 50 ms)
+        for i, f in enumerate(frames):
+            for topic, prefix in ((DEPTH, "zed_depth"), (CONF, "zed_conf")):
+                if not zed[topic]:
+                    continue
+                best = min(zed[topic], key=lambda s: abs(s - f["stamp_ns"]))
+                if abs(best - f["stamp_ns"]) > 50_000_000:
+                    continue
+                conn, raw = zed[topic][best]
+                np.save(out / f"{prefix}_{i:04d}.npy", to_float_image(reader.deserialize(raw, conn.msgtype)))
+                f[prefix] = f"{prefix}_{i:04d}.npy"
 
     (out / "intrinsics.json").write_text(json.dumps(intrinsics))
     (out / "frames.json").write_text(json.dumps(frames, indent=1))

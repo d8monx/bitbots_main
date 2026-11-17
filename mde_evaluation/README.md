@@ -24,4 +24,14 @@ The scripts pick the device automatically (`scripts/gpu.py`): NVIDIA GPU (CUDA),
 KMP_DUPLICATE_LIB_OK=TRUE .venv/bin/python scripts/eval_da3.py  # DA3 Small/Base/Metric-Large, metrics + figure -> results/
 ```
 
+Real recordings (rosbags in `data/rosbags/`, not in git):
+
+```bash
+.venv/bin/python scripts/extract_rosbag.py data/rosbags/real_26-11-04/<bag>       # frames, ZED depth, camera pose -> data/frames/
+KMP_DUPLICATE_LIB_OK=TRUE .venv/bin/python scripts/eval_real.py          # DA3, ZED and IPM against tape and ground plane -> results/real_26-11-04/
+KMP_DUPLICATE_LIB_OK=TRUE .venv/bin/python scripts/pitch_sensitivity.py  # effect of a wrong head pitch on the ball distance
+```
+
+`eval_real.py` computes the DA3 depth maps once and keeps them in `data/da3/`. The tape measurements and object markings are in `annotations/`.
+
 `KMP_DUPLICATE_LIB_OK=TRUE` works around an OpenMP clash caused by `pycolmap`, which DA3 imports for its COLMAP export only.

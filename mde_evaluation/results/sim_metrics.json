@@ -1,0 +1,92 @@
+[
+  {
+    "model": "DA3-SMALL",
+    "view": "near",
+    "ms": 2552,
+    "proc": "504x280",
+    "scale": 0.924,
+    "AbsRel": 0.343,
+    "RMSE": 0.641,
+    "d1": 0.353
+  },
+  {
+    "model": "DA3-SMALL",
+    "view": "mid",
+    "ms": 2247,
+    "proc": "504x280",
+    "scale": 1.832,
+    "AbsRel": 0.23,
+    "RMSE": 1.184,
+    "d1": 0.532
+  },
+  {
+    "model": "DA3-SMALL",
+    "view": "far",
+    "ms": 2205,
+    "proc": "504x280",
+    "scale": 4.437,
+    "AbsRel": 0.098,
+    "RMSE": 0.441,
+    "d1": 0.963
+  },
+  {
+    "model": "DA3-BASE",
+    "view": "near",
+    "ms": 5780,
+    "proc": "504x280",
+    "scale": 1.019,
+    "AbsRel": 0.105,
+    "RMSE": 0.278,
+    "d1": 0.9
+  },
+  {
+    "model": "DA3-BASE",
+    "view": "mid",
+    "ms": 5681,
+    "proc": "504x280",
+    "scale": 1.746,
+    "AbsRel": 0.054,
+    "RMSE": 0.698,
+    "d1": 0.928
+  },
+  {
+    "model": "DA3-BASE",
+    "view": "far",
+    "ms": 6753,
+    "proc": "504x280",
+    "scale": 3.249,
+    "AbsRel": 0.092,
+    "RMSE": 0.636,
+    "d1": 0.925
+  },
+  {
+    "model": "DA3METRIC-LARGE",
+    "view": "near",
+    "ms": 13277,
+    "proc": "504x280",
+    "scale": 1.0,
+    "AbsRel": 0.441,
+    "RMSE": 0.479,
+    "d1": 0.065
+  },
+  {
+    "model": "DA3METRIC-LARGE",
+    "view": "mid",
+    "ms": 13137,
+    "proc": "504x280",
+    "scale": 1.0,
+    "AbsRel": 0.168,
+    "RMSE": 0.352,
+    "d1": 0.99
+  },
+  {
+    "model": "DA3METRIC-LARGE",
+    "view": "far",
+    "ms": 12778,
+    "proc": "504x280",
+    "scale": 1.0,
+    "AbsRel": 0.394,
+    "RMSE": 0.866,
+    "d1": 0.072
+  }
+]

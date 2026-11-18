@@ -1,5 +1,8 @@
 .venv/
-data/
-results/
+#data/
+#results/
+# wir werden die ergebnisse später wieder ignorieren aber fürs Testen ist es bequemer
+# Rosbags bleiben immer ignoriert: einzelne Dateien sind größer als das GitHub-Limit von 100 MB
+data/rosbags/
 __pycache__/
 .DS_Store

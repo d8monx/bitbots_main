@@ -21,3 +21,4 @@ pycolmap
 evo
 scipy
 rosbags
+openpyxl

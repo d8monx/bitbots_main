@@ -24,6 +24,7 @@ WALL = 4.775  # measured 04.11.: wall opposite the robot, from the point below t
 
 
 def abs_rel(pred, gt, mask):
+    """Mean absolute relative error |pred - gt| / gt over the masked pixels where both have a valid value."""
     m = mask & np.isfinite(pred) & np.isfinite(gt) & (pred > 0)
     return float(np.mean(np.abs(pred[m] - gt[m]) / gt[m])) if m.any() else float("nan")
 
@@ -34,13 +35,17 @@ def main():
     parser.add_argument("--frame", type=int, default=5)
     args = parser.parse_args()
 
+    # Load the metric DA3 model once and reuse it for all bags
     model = DepthAnything3.from_pretrained(DA3).to(pick_device()).eval()
+    # One row per bag: RGB | ZED depth | DA3 depth | ground-plane depth
     fig, axes = plt.subplots(len(args.frames), 4, figsize=(16, 2.6 * len(args.frames)), squeeze=False)
     for row, folder in enumerate(args.frames):
+        # Load intrinsics and the selected frame (image, ZED depth, camera pose) written by extract_rosbag.py
         K = json.loads((folder / "intrinsics.json").read_text())
         f = json.loads((folder / "frames.json").read_text())[args.frame]
         rgb = np.array(Image.open(folder / f["file"]).convert("RGB"))
         zed = np.load(folder / f["zed_depth"])
+        # Reference depth: intersect every pixel's viewing ray with the ground plane using the camera pose
         gt = ground_depth(np.array(f["T_ground_camera"]), K)
         da3 = predict(model, rgb, K, is_metric=True)
         # floor pixels in front of the wall (colour mask from the simulation does not fit the darker real carpet)
@@ -49,6 +54,7 @@ def main():
         wall = np.nanmedian(zed[wall_rows]) if wall_rows.any() else np.nan
         wall_da3 = np.nanmedian(da3[wall_rows]) if wall_rows.any() else np.nan
 
+        # Coverage of the ZED depth (whole image and field only) and AbsRel of ZED / DA3 against the ground plane
         valid = np.isfinite(zed) & (zed > 0)
         print(f"{folder.name:34s} ZED gültig: Bild {valid.mean():5.1%}, Rasen {valid[field].mean():5.1%} | "
               f"AbsRel Rasen: ZED {abs_rel(zed, gt, field):.3f}, DA3-Metric {abs_rel(da3, gt, field):.3f} | "
@@ -60,9 +66,11 @@ def main():
             if col == 0:
                 ax.imshow(img)
             else:
+                # Depth maps share one colour scale; invalid values are shown as NaN (white)
                 ax.imshow(np.where(np.isfinite(img), img, np.nan), cmap="turbo", vmin=0, vmax=VMAX)
             ax.set_title(title, fontsize=9)
             ax.axis("off")
+    # Shared colour bar for all depth panels, then save the figure
     sm = plt.cm.ScalarMappable(cmap="turbo", norm=plt.Normalize(0, VMAX))
     fig.colorbar(sm, ax=axes, shrink=0.6, label="Tiefe [m] (weiß = kein Wert)")
     out = ROOT / "results/compare_zed.png"

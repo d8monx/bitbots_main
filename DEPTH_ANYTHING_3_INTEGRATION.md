@@ -1,421 +1,476 @@
-# Integrating Depth Anything 3 via the GerdsenAI ROS 2 Wrapper
+# Integrating Depth Anything 3 as `bitbots_depth`
 
-This document describes what has to be done to run
+This document describes how
 [Depth Anything 3](https://github.com/ByteDance-Seed/Depth-Anything-3) (DA3)
-monocular depth estimation in this workspace using the
+monocular depth estimation is integrated into this workspace. DA3 is exported
+to ONNX outside the workspace and runs inside a new ROS 2 package,
+`bitbots_depth`, on ONNX Runtime, reusing the inference approach of
+`bitbots_vision`. PyTorch is not part of the workspace or the robot software.
+
+The
 [GerdsenAI ROS 2 DA3 wrapper](https://github.com/GerdsenAI/GerdsenAI-Depth-Anything-3-ROS2-Wrapper)
-(ROS package `depth_anything_3_ros2`).
+is **not** imported or run. A fork of it is used only as offline export and
+reference tooling.
 
 It is a plan, not a finished integration. Steps that touch dependencies,
-hardware, or robot configuration need team confirmation before they are
+hardware, or robot configuration still need team confirmation before they are
 implemented (see [AGENTS.md](AGENTS.md)).
 
 ---
 
-## 1. Starting point
+## 1. Decisions
 
-### 1.1 This workspace
+| # | Decision | Consequence for this plan |
+|---|----------|---------------------------|
+| D1 | **Target compute:** NVIDIA Jetson GPU on the robot. Developer PCs with an NVIDIA GPU are used for simulation testing and example images. | Both `linux-aarch64` (Jetson) and `linux-64` (dev PC) must be supported. See §9 for the execution provider per platform. |
+| D2 | **Use:** distances to obstacles, robots and the ball. **Not** used for localisation (IPM already covers it). | Depth must be **metric** at the detected objects. A metric model or scale recovery is required (§10). Localisation packages stay unchanged. |
+| D3 | **Model:** CC BY-NC 4.0 is acceptable (university project), so every DA3 variant may be used. DA3-Small and DA3-Base are considered safe for the compute budget; DA3-Large may fit. The final choice follows benchmarks. | The pipeline must support several variants with no code change (model = data package). A benchmark step is part of the plan (§11). |
+| D4 | **No PyTorch** in the workspace. Depth-specific additions go into a **dedicated Pixi feature** rather than `feature.ros`. | Runtime uses ONNX Runtime only. The dedicated feature holds the DA3 model packages (§7). |
+| D5 | **Fork** the GerdsenAI wrapper. Do **not** run the wrapper on the robot (or in the workspace at all). The fork is used only as a source for ONNX export and reference code. | No `src/lib` import, no `.gitrepo`, no wrapper patches in this repository. Export runs in the fork's own environment (§4). |
+| D6 | **ONNX export** plus a new package **`bitbots_depth`** instead of extending `bitbots_vision`. | New `ament_cmake` package modelled on `bitbots_vision` (§6). `bitbots_vision` stays unchanged. |
+
+---
+
+## 2. Starting point
+
+### 2.1 This workspace
 
 | Aspect | Current state | Where |
 |--------|---------------|-------|
-| ROS distro | ROS 2 **Jazzy** via RoboStack | [pixi.toml](pixi.toml) (`robostack-jazzy` channel, `ros-jazzy-*` deps) |
-| Python | 3.12, `numpy <2` | [pixi.toml](pixi.toml) `[dependencies]`, `[feature.ros.dependencies]` |
+| ROS distro / Python | ROS 2 **Jazzy** via RoboStack, Python 3.12, `numpy <2` | [pixi.toml](pixi.toml) |
 | Env / build | Pixi environments `default`, `format`, `robot`; `colcon` via `pixi run build` / `pixi run test` | [pixi.toml](pixi.toml) `[tasks]`, `[environments]` |
 | Platforms | `linux-64` and `linux-aarch64` (CI builds on both) | [pixi.toml](pixi.toml), [.github/workflows/ci.yml](.github/workflows/ci.yml) |
-| RMW | `rmw_zenoh_cpp` | [pixi.toml](pixi.toml) `[feature.ros.activation.env]` |
-| Camera | ZED Mini via imported `zed-ros2-wrapper`, ZED SDK stereo depth disabled (`depth_mode: 'NONE'`) | [vision.launch](src/bitbots_misc/bitbots_bringup/launch/vision.launch), [common_stereo.yaml](src/lib/zed-ros2-wrapper/zed_wrapper/config/common_stereo.yaml) |
+| Camera | ZED Mini via imported `zed-ros2-wrapper`, ZED SDK stereo depth disabled | [vision.launch](src/bitbots_misc/bitbots_bringup/launch/vision.launch), [common_stereo.yaml](src/lib/zed-ros2-wrapper/zed_wrapper/config/common_stereo.yaml) |
 | Image topics | `zed/zed_node/rgb/image_rect_color` (`bgra8`) and `zed/zed_node/rgb/camera_info`; the MuJoCo sim publishes the same topics | [visionparams.yaml](src/bitbots_vision/config/visionparams.yaml), [simulation.py](src/bitbots_simulation/bitbots_mujoco_sim/bitbots_mujoco_sim/simulation.py) |
-| Existing NN inference | `bitbots_vision` (C++) runs RF-DETR through ONNX Runtime with a TensorRT → CUDA → WebGPU → CPU fallback chain; no PyTorch in the stack | [rfdetr_vision.rst](src/bitbots_vision/docs/manual/rfdetr_vision.rst) |
-| Model distribution | NN weights are shipped as conda packages from the self-hosted `conda-misc` channel (e.g. `bitbots_model_*`) | [pixi.toml](pixi.toml) channels + "Neural network models" section |
-| Imported libs | Third-party ROS packages live in `src/lib/<name>` with a `.gitrepo` file (git-subrepo / `git-include`), excluded from pre-commit and from `pixi run test` | [src/lib/zed-ros2-wrapper/.gitrepo](src/lib/zed-ros2-wrapper/.gitrepo), [.pre-commit-config.yaml](.pre-commit-config.yaml), [pixi.toml](pixi.toml) `[tasks.test]` |
-| Launch hierarchy | `teamplayer.launch` → `highlevel.launch` → `bitbots_bringup/vision.launch` → `bitbots_vision/vision.launch` (+ ZED driver) | [src/bitbots_misc/bitbots_bringup/launch/](src/bitbots_misc/bitbots_bringup/launch) |
-| Robot compute | Docs list Intel NUC hosts with Vulkan drivers; the code base also contains Jetson/aarch64 support (system monitor, ZED CMake fix, `linux-aarch64` platform) | [robots.rst](src/bitbots_misc/bitbots_docs/docs/manual/physical_robot/robots.rst), [setup_robot.rst](src/bitbots_misc/bitbots_docs/docs/manual/physical_robot/setup_robot.rst), [gpu.py](src/bitbots_misc/system_monitor/system_monitor/gpu.py) |
+| C++ NN inference | `bitbots_vision` runs RF-DETR through ONNX Runtime (`libonnxruntime-webgpu`, self-built, `conda-misc` channel) with a TensorRT → CUDA → WebGPU → CPU fallback chain | [rfdetr_handler.cpp](src/bitbots_vision/src/rfdetr_handler.cpp), [rfdetr_vision.rst](src/bitbots_vision/docs/manual/rfdetr_vision.rst), [CMakeLists.txt](src/bitbots_vision/CMakeLists.txt) |
+| Python NN inference | conda-forge `onnxruntime` (CPU only) | [pixi.toml](pixi.toml) `[feature.ros.dependencies]` |
+| Model distribution | Model directories shipped as `bitbots_model_*` conda packages from `conda-misc`; the vision node resolves a package name to `$CONDA_PREFIX/share/bitbots_model_<name>` | [pixi.toml](pixi.toml), [vision_parameters.yaml](src/bitbots_vision/config/vision_parameters.yaml) |
+| 3D object positions | `soccer_ipm` projects 2D detections onto the ground plane and publishes `soccer_vision_3d_msgs` | [ipm.launch](src/bitbots_misc/bitbots_ipm/launch/ipm.launch), [src/lib/soccer_ipm](src/lib/soccer_ipm) |
+| GPU monitoring | `system_monitor` supports Jetson GPUs via sysfs | [gpu.py](src/bitbots_misc/system_monitor/system_monitor/gpu.py) |
 
-### 1.2 The GerdsenAI wrapper (upstream `main`)
+**Important finding on ONNX Runtime providers:** the `libonnxruntime-webgpu`
+package (both `linux-64` and `linux-aarch64`) ships only the core
+`libonnxruntime.so`, without the separate CUDA/TensorRT provider libraries.
+The TensorRT/CUDA registration in `RfdetrHandler` therefore falls back, and
+the effective GPU path today is **WebGPU (Vulkan)**, on the dev PC and the
+Jetson alike. See §9 for what this means for DA3.
 
-- `ament_python` package `depth_anything_3_ros2`, MIT licensed, targets
-  **ROS 2 Humble / Ubuntu 22.04 / Python 3.10**.
-- Single node `depth_anything_3_node` (node name `depth_anything_3`):
-  - Subscribes `~/image_raw` (`sensor_msgs/Image`, BEST_EFFORT) and
-    `~/camera_info`.
-  - Publishes `~/depth` (`32FC1`), `~/depth_colored` (`bgr8`),
-    `~/confidence` (`32FC1`), `~/depth/camera_info`. Output headers reuse the
-    input image header (same `frame_id` and stamp).
-  - Parameters: `model_name`, `device` (`cuda`|`cpu`), `cache_dir`,
-    `inference_height/width`, `input_encoding`, `keep_image_size`,
-    `normalize_depth`, `publish_colored`, `publish_confidence`, `colormap`,
-    `queue_size`, `processing_threads`, `log_inference_time`,
-    `use_shared_memory`.
-- Three inference backends in `da3_inference.py`:
-  1. `DA3InferenceWrapper` – PyTorch, loads the model with
-     `depth_anything_3.api.DepthAnything3.from_pretrained(...)` (Hugging Face
-     download unless a local path is given).
-  2. `SharedMemoryInference` / `SharedMemoryInferenceFast` – talk via
-     `/dev/shm/da3` to a **separate host process**
-     (`scripts/trt_inference_service_shm.py`) that runs a TensorRT engine
-     (Jetson / JetPack 6 oriented, needs host `tensorrt` + `pycuda`).
-- Runtime Python deps (from `requirements.txt` and DA3's `pyproject.toml`):
-  `torch`, `torchvision`, `transformers`, `huggingface_hub`, `safetensors`,
-  `timm`, `opencv-python`, `pillow`, `numpy<2`, `pyyaml`, `onnx`, `gsplat`,
-  and the `depth-anything-3` package itself (only installable from git), which
-  in turn pulls `xformers`, `open3d`, `pycolmap`, `evo`, `e3nn`, `trimesh`,
-  `moviepy==1.0.3`, `plyfile`, `pillow_heif`, `omegaconf`, `einops`,
-  `fastapi`, `uvicorn`, `typer`, `pre-commit`, ….
-- Observed issues relevant for us (verify against the pinned commit):
-  - The upstream launch file does **not** pass `use_sim_time`.
-  - `launch_ros` is used but not declared in `package.xml`; `image_transport`
-    is declared but unused.
-  - `inference_height/width`, `input_encoding` and `processing_threads` are
-    read but not used by the PyTorch backend (DA3 resizes internally, the node
-    always converts to `rgb8`).
-  - Default `normalize_depth: true` → output is **relative** depth in `[0, 1]`
-    per frame, not metres.
-  - Only `DA3-SMALL` weights are Apache-2.0; Base/Large/Giant/Metric/Nested are
-    CC-BY-NC-4.0.
+### 2.2 DA3 model family (from the upstream model cards)
+
+| Variant | Output | Licence | Notes |
+|---------|--------|---------|-------|
+| `DA3-SMALL` | relative depth (+ confidence, ray) | Apache 2.0 | cheapest |
+| `DA3-BASE` | relative depth (+ confidence, ray) | Apache 2.0 | |
+| `DA3-LARGE-1.1` | relative depth (+ confidence, ray) | CC BY-NC 4.0 | prefer `-1.1` over the deprecated original checkpoint |
+| `DA3METRIC-LARGE` | **metric** depth (needs focal length) | Apache 2.0 | same backbone size as Large |
+| `DA3MONO-LARGE` | relative monocular depth | Apache 2.0 | same backbone size as Large |
+| `DA3-GIANT-1.1`, `DA3NESTED-GIANT-LARGE-1.1` | relative / metric | CC BY-NC 4.0 | far too large for the robot |
+
+Upstream states that `DA3METRIC-LARGE` output converts to metres via
+`focal * net_output / 300`, with `focal` in pixels. Verify how this interacts
+with input resizing during export (§4).
 
 ---
 
-## 2. Decisions required before implementation
+## 3. Architecture overview
 
-| # | Question | Why it matters |
-|---|----------|----------------|
-| D1 | **Target compute** for DA3: robot (which board – Intel NUC or Jetson?), a developer PC with an NVIDIA GPU, or simulation only? | Determines whether the PyTorch CUDA path, CPU path, or Jetson TensorRT host service is used, and which platform-specific packages are needed. On an Intel NUC without an NVIDIA GPU only the CPU backend works, which is unlikely to be real-time. |
-| D2 | **What is the depth used for?** (visualisation/research, obstacle/robot distance, ball distance, localisation) | Decides whether relative depth is enough or a metric model (CC-BY-NC) / scale recovery is required, and which downstream packages must change. |
-| D3 | **Model variant** and licence | `DA3-SMALL` is the only permissively licensed model and the cheapest to run. |
-| D4 | **Pixi feature / environment** for the heavy PyTorch stack | Adding PyTorch & co. to `feature.ros` would bloat every developer and CI environment. A dedicated feature/environment is recommended (see §4). Needs confirmation per [AGENTS.md](AGENTS.md#dependencies). |
-| D5 | **Import strategy**: vendor the wrapper in `src/lib` (git-subrepo/`git-include`, consistent with other third-party ROS packages) vs. a fork under `bit-bots/` | We need several small patches (§3.2). A fork lets us keep them and upstream them; vendoring directly from GerdsenAI means local patches in `src/lib` which [AGENTS.md](AGENTS.md#repository-boundaries) discourages. |
-| D6 | Long-term backend: keep PyTorch, or export DA3 to ONNX and run it via ONNX Runtime like `bitbots_vision` | ONNX Runtime with TensorRT/WebGPU is already in the stack and works on the robot hardware; PyTorch is not. See §9. |
-
----
-
-## 3. Import the wrapper package
-
-### 3.1 Add the sources
-
-1. Decide D5. Recommended: fork to `bit-bots/GerdsenAI-Depth-Anything-3-ROS2-Wrapper`
-   (or similar) and pin a specific commit.
-2. Import it as a subrepo, analogous to the existing entries:
-
-   ```bash
-   pixi run -e default git subrepo clone \
-     <fork-or-upstream-url> src/lib/depth_anything_3_ros2 -b <branch>
-   ```
-
-   This creates `src/lib/depth_anything_3_ros2/.gitrepo` (compare
-   [src/lib/zed-ros2-wrapper/.gitrepo](src/lib/zed-ros2-wrapper/.gitrepo)).
-   Use the repository's `git-include` tooling instead if that is the preferred
-   workflow for new imports.
-3. Remove or ignore content that colcon / the deploy rsync should not pick up
-   (Docker files, `desktop/`, demo scripts are harmless but large assets or
-   generated TensorRT engines must not be committed). Check
-   [.rsyncignore](.rsyncignore) if anything large must not be synced to robots.
-
-### 3.2 Required patches to the wrapper (ideally upstreamed)
-
-| Patch | Reason |
-|-------|--------|
-| Declare `launch_ros` (`exec_depend`) and drop the unused `image_transport` dependency in `package.xml` | Keep manifest and runtime imports in sync. |
-| Add `use_sim_time` launch argument/parameter to `depth_anything_3.launch.py` (or just don't use the upstream launch file, see §6) | Required for MuJoCo simulation. |
-| Allow `model_name` to be a **local directory** for offline use and make sure no network access happens at start-up | Robots have no internet at competitions (see §5). Verify how `DepthAnything3.from_pretrained` handles local paths. |
-| Either forward `inference_height/width` to DA3 (e.g. `process_res`) or remove the parameters | Currently ineffective for the PyTorch backend; resolution is the main performance knob. |
-| Make heavy imports (`torch`, `depth_anything_3`) lazy where possible | Lets `colcon test` / import checks run without the full PyTorch stack. |
-| Python 3.12 / Jazzy smoke-test fixes, if any | Upstream only tests Humble / 3.10. The node uses plain `rclpy`, so few issues are expected, but it must be verified. |
-| Optional: header `frame_id` / output resizing behaviour (`keep_image_size: true`) | Downstream consumers expect depth pixels aligned with the camera image and `camera_info`. |
+```text
+  fork of GerdsenAI wrapper (outside this repo, own env with PyTorch)
+      │  export + parity check per variant / resolution / precision
+      ▼
+  <model_dir>/onnx/da3.onnx + model_config.yaml
+      │  rattler-build
+      ▼
+  conda-misc: bitbots_model_da3_<variant>   ──►  Pixi feature `depth` (this repo)
+                                                   │
+  zed/zed_node/rgb/image_rect_color ─┐             ▼
+  zed/zed_node/rgb/camera_info  ─────┴──►  bitbots_depth (C++, ONNX Runtime)
+                                                   │
+                       depth image / camera_info / confidence (metric, §10)
+                                                   │
+                         ┌─────────────────────────┴──────────────┐
+                         ▼                                        ▼
+         object distances (balls/robots, §10.3)        obstacles (later, §10.4)
+```
 
 ---
 
-## 4. Dependencies (Pixi)
+## 4. ONNX export (fork, outside the workspace)
 
-> Per [AGENTS.md](AGENTS.md#dependencies), propose the exact feature and
-> environment to the team and get confirmation **before** editing
+1. Fork the GerdsenAI wrapper into the team's GitHub organisation and pin the
+   upstream DA3 commit it builds on. Its `scripts/build_tensorrt_engine.py`
+   already contains an ONNX export step that serves as the starting point.
+   [ika-rwth-aachen/ros2-depth-anything-v3-trt](https://github.com/ika-rwth-aachen/ros2-depth-anything-v3-trt)
+   is a second reference for a DA3 ONNX/TensorRT export and its pre-processing.
+2. Keep PyTorch, DA3, and the export dependencies in the fork's own
+   environment (e.g. its own `pixi.toml` or `requirements.txt`). Nothing from
+   it is added to this repository's [pixi.toml](pixi.toml).
+3. Adapt the export script so that it:
+   - wraps the DA3 network for a **single view** and exports only the outputs
+     we need (depth, and confidence if useful). Drop the ray/camera heads.
+   - uses a **fixed input resolution** that is a multiple of the ViT patch size
+     and matches the camera aspect ratio, so the node can resize without
+     letterboxing and the camera intrinsics stay easy to scale. Several
+     resolutions may be exported for benchmarking (§11).
+   - bakes the input normalisation (and channel order) into the graph, so the
+     node only has to resize and convert to float. This prevents mismatches
+     between export and runtime pre-processing.
+   - targets an opset supported by the ONNX Runtime version in
+     [pixi.toml](pixi.toml), simplifies the graph, and produces fp32 and fp16
+     variants (consistent with the RF-DETR fp16 exports).
+   - runs a **parity check** of ONNX Runtime vs. PyTorch on sample frames
+     (rosbag and MuJoCo images), including the metric conversion for
+     `DA3METRIC-LARGE`.
+   - writes the model directory described in §5.
+4. Check ONNX Runtime's session logs with the WebGPU provider for nodes that
+   fall back to CPU. Unsupported operators silently split the graph and
+   destroy performance. Fix them in the export wrapper where possible.
+
+---
+
+## 5. Model packages (offline availability)
+
+Robots have no internet access at competitions, so models ship as conda
+packages on the self-hosted `conda-misc` channel, following the existing
+`bitbots_model_*` packages.
+
+Proposed model directory layout, mirroring the RF-DETR layout in
+[rfdetr_vision.rst](src/bitbots_vision/docs/manual/rfdetr_vision.rst):
+
+```text
+<model_dir>/
+  onnx/da3.onnx
+  model_config.yaml
+  LICENSE
+```
+
+`model_config.yaml` describes what the node needs to interpret the model
+without code changes, e.g.:
+
+- variant name and upstream checkpoint / commit,
+- input width/height and expected channel order,
+- output names and output kind (`relative` or `metric`),
+- for metric models: the conversion constant and the reference resolution the
+  focal length refers to,
+- licence identifier.
+
+Package names should encode variant, resolution, and precision (e.g.
+`bitbots_model_da3_small_<res>_fp16`). Never commit ONNX files or TensorRT
+engines to this repository.
+
+---
+
+## 6. New package `bitbots_depth`
+
+### 6.1 Location and build
+
+- `src/bitbots_depth/` (sibling of `src/bitbots_vision`), `ament_cmake`, C++.
+- C++ instead of Python because the only GPU-capable ONNX Runtime in the
+  workspace is the C++ `libonnxruntime-webgpu`. The Python `onnxruntime` is
+  CPU only.
+- Reuse the `bitbots_vision` patterns:
+  - ONNX Runtime discovery from
+    [CMakeLists.txt](src/bitbots_vision/CMakeLists.txt),
+  - a processing library **without** ONNX Runtime for unit tests, plus a
+    separate inference library (as `bitbots_vision` does),
+  - `generate_parameter_library` for parameters,
+  - model path resolution from a conda package name, as in
+    [vision_parameters.yaml](src/bitbots_vision/config/vision_parameters.yaml).
+- The execution-provider fallback logic from `RfdetrHandler` is copied at
+  first. Extracting it into a shared helper library is a possible follow-up
+  refactor, but it is out of scope here so that `bitbots_vision` stays
+  untouched.
+- `package.xml` dependencies: `rclcpp`, `sensor_msgs`, `cv_bridge`,
+  `generate_parameter_library`, `tf2_ros` (for scale recovery, §10.2), plus
+  `soccer_vision_3d_msgs` / `soccer_vision_2d_msgs` if object distances are
+  computed here (§10.3). All of these already exist in the workspace.
+
+### 6.2 Node behaviour
+
+- Subscribes to the camera image and `camera_info` (topic names as
+  parameters, defaults matching the ZED / MuJoCo topics). The subscription
+  uses a sensor-data QoS and keeps only the latest frame.
+- Optional rate limiting / frame skipping, so DA3 does not starve RF-DETR on
+  the shared GPU (§9).
+- Pre-processing: `bgra8` → RGB, resize to the model input resolution, and
+  convert to a float tensor (normalisation is in the graph, §4).
+- Inference through ONNX Runtime with the provider chain described in §9.
+- Post-processing:
+  - metric models: convert to metres using the focal length from
+    `camera_info`, scaled to the model input resolution (§10.1).
+  - relative models: per-frame scale recovery (§10.2).
+- Publishes, with the input image header (same stamp and `frame_id`):
+  - `depth/image` (`32FC1`, metres),
+  - `depth/camera_info` (intrinsics scaled to the depth image resolution),
+  - optional `depth/confidence` (`32FC1`),
+  - optional `depth/debug_image` (colourised, only for debugging because of
+    bandwidth).
+- A parameter controls whether depth is published at model resolution
+  (cheaper; consumers use the scaled `camera_info`) or resized to the camera
+  resolution.
+- Logs inference time and the active execution provider at start-up, as
+  `bitbots_vision` does.
+
+### 6.3 Tests
+
+- gtest unit tests for the processing library: intrinsics scaling,
+  metric conversion, scale-recovery estimator (synthetic data), pixel ↔ ray
+  back-projection, and model config parsing.
+- Inference tests that need a model package are skipped when the model is not
+  installed, so `pixi run -e default test` works in CI without the `depth`
+  feature.
+
+---
+
+## 7. Dependencies (Pixi)
+
+> Per [AGENTS.md](AGENTS.md#dependencies), confirm the exact feature and
+> environment layout with the team **before** editing
 > [pixi.toml](pixi.toml) or regenerating `pixi.lock`.
 
-### 4.1 Proposed layout
+`bitbots_depth` needs no new runtime libraries. ONNX Runtime, OpenCV,
+`cv_bridge`, TF, and the soccer message packages are already in
+`feature.ros`, so the package builds in the `default` environment and in CI.
 
-Add a new feature (e.g. `depth_anything`) and a dedicated environment instead
-of extending `feature.ros`, so that `default`, `robot` and CI are not forced to
-download PyTorch:
+Per D4, the DA3 model packages go into a dedicated feature so that `default`
+and CI do not download large models:
 
 ```toml
-[feature.depth_anything.dependencies]
-# conda-forge packages, versions to be chosen consistent with neighbouring entries
-pytorch = "..."
-torchvision = "..."
-transformers = "..."
-huggingface_hub = "..."
-safetensors = "..."
-timm = "..."
-einops = "..."
-omegaconf = "..."
-# + whatever `depth_anything_3` imports at inference time (see 4.3)
-
-[feature.depth_anything.pypi-dependencies]
-depth-anything-3 = { git = "https://github.com/ByteDance-Seed/Depth-Anything-3.git", rev = "<pinned sha>" }
+[feature.depth.dependencies]
+# DA3 model packages from conda-misc (variant(s) chosen after benchmarking, §11)
+bitbots_model_da3_<variant> = "..."
 
 [environments]
 default = ["ros", "format"]
 format = ["format"]
-robot = ["ros", "format", "robot"]
-depth = ["ros", "format", "depth_anything"]           # development / desktop GPU
-# robot_depth = ["ros", "format", "robot", "depth_anything"]  # only if D1 says "on robot"
+robot = ["ros", "format", "robot"]               # add "depth" once a model is chosen
+depth = ["ros", "format", "depth"]               # dev PC / simulation testing
 ```
 
-All needed core packages were found on `conda-forge` (`pytorch`,
-`torchvision`, `xformers`, `open3d`, `pycolmap`, `timm`, `transformers`,
-`huggingface_hub`, `safetensors`, `einops`, `omegaconf`, `e3nn`, `evo`,
-`trimesh`, `moviepy`, `plyfile`, `pillow-heif`, `gsplat`). Confirm with
-`pixi search <package>` for both `linux-64` and `linux-aarch64`; at the time of
-writing `xformers` showed no `linux-aarch64` build.
+To be confirmed:
 
-### 4.2 Known conflicts to resolve
+- Whether the robot gets the `depth` feature directly in `robot` or a separate
+  `robot_depth` environment during the evaluation phase. Check how
+  `scripts/deploy_robots.py` selects the environment.
+- Whether benchmark models (several variants/resolutions) live in the feature
+  or are installed only on demand.
 
-- **OpenCV**: DA3 and the wrapper request `opencv-python` from PyPI, while the
-  workspace uses conda `opencv`/`libopencv` and `cv_bridge`. Installing the PyPI
-  wheel next to the conda build must be avoided. Check whether Pixi's
-  conda↔PyPI mapping satisfies `opencv-python` with the conda package; if not,
-  install `depth-anything-3` without its declared dependencies (e.g. vendor a
-  fork with trimmed requirements) and list the actually needed runtime deps
-  explicitly.
-- **numpy**: DA3 requires `numpy<2`, which matches the current constraint.
-  Keep it consistent.
-- **pillow**: the workspace pins `pillow <12` (see the comment in
-  [pixi.toml](pixi.toml)); make sure the solve still succeeds.
-- **moviepy**: DA3 pins `moviepy==1.0.3`, which is old; conda-forge's latest
-  is 2.x. Prefer trimming this dependency (it is only needed for video export).
-- **Heavy, inference-irrelevant deps** (`open3d`, `pycolmap`, `evo`, `e3nn`,
-  `gsplat`, `fastapi`, `uvicorn`, `pre-commit`, `xformers`): only needed for
-  DA3's CLI, 3D reconstruction, or Gaussian splatting. Avoid installing them on
-  robots if the import path for `DepthAnything3` inference works without them
-  (verify, see 4.3).
-- **PyTorch build variant**: on `linux-64` choose a CUDA-enabled conda-forge
-  build if a desktop NVIDIA GPU is targeted (requires `system-requirements`
-  `cuda = "12"` or similar in the feature). On Jetson, conda-forge PyTorch is
-  **not** a JetPack/Tegra GPU build, so CUDA inference inside the Pixi env will
-  not work there (see §7).
-
-### 4.3 Determine the minimal runtime dependency set
-
-Before finalising the feature, install `depth-anything-3` in a scratch env and
-check which modules `depth_anything_3.api` imports transitively when only
-calling `from_pretrained(...)` and `inference(...)`. Keep only those.
-
-### 4.4 CI
-
-- Do not add the new environment to the CI build matrix unless needed; if it
-  is added, cache size and build time will grow considerably.
-- The wrapper builds as `ament_python` without PyTorch present, so the
-  existing `pixi run -e default build` keeps working even without the new
-  feature, as long as nothing imports the module at build time.
-- Add `depth_anything_3_ros2` to `--packages-skip` in `[tasks.test]` in
-  [pixi.toml](pixi.toml), consistent with other imported `src/lib` packages
-  (its tests import PyTorch and the Jetson/shared-memory code paths).
+No PyTorch, no PyPI packages, and no CUDA `system-requirements` are added.
 
 ---
 
-## 5. Model weights (offline availability)
+## 8. Launch and configuration
 
-At start-up `DepthAnything3.from_pretrained` downloads weights from Hugging
-Face. Robots must not depend on internet access.
+### 8.1 Parameter file
 
-1. Choose the model (D3). Prefer `depth-anything/DA3-SMALL` (Apache-2.0).
-2. Package the weights as a conda package on the self-hosted `conda-misc`
-   channel, following the existing `bitbots_model_*` packages
-   (see [pixi.toml](pixi.toml) "Neural network models / data packages" and the
-   `model.path` comment in
-   [visionparams.yaml](src/bitbots_vision/config/visionparams.yaml)).
-3. Point `model_name` to the installed local directory (wrapper patch, §3.2)
-   and set `HF_HUB_OFFLINE=1` in the feature's activation env so that no
-   network request is attempted.
-4. If a TensorRT engine is used (§7), engines are hardware/TensorRT-version
-   specific: build them on the target device at deploy time; never commit
-   them.
+Canonical defaults go in the `generate_parameter_library` definition, e.g.
+`src/bitbots_depth/config/depth_parameters.yaml`. The deployed values go in
+`src/bitbots_depth/config/depthparams.yaml`, following the
+`bitbots_vision` split between `vision_parameters.yaml` and
+`visionparams.yaml`. Document parameters by purpose, not by concrete values.
 
----
+### 8.2 Launch file
 
-## 6. Launch and configuration integration
-
-### 6.1 Parameter file
-
-Create a canonical parameter file, e.g.
-`src/bitbots_vision/config/depth_anything_3.yaml` (or in a small new
-`bitbots_depth` package if the team prefers to keep `bitbots_vision`
-dependency-free):
-
-```yaml
-depth_anything_3:
-  ros__parameters:
-    model_name: "<local model dir or HF id>"
-    device: "cuda"            # or "cpu", depending on D1
-    normalize_depth: false    # keep raw model output if downstream needs (relative/metric) values
-    keep_image_size: true     # align depth pixels with the camera image / camera_info
-    publish_colored: false    # enable only for debugging (bandwidth)
-    publish_confidence: true
-    queue_size: 1
-    log_inference_time: false
-```
-
-Avoid hard-coding values in documentation; describe their purpose instead.
-
-### 6.2 Launch file
-
-Write our own launch file instead of including the upstream one, so we
-control `use_sim_time`, parameters and remaps. Follow the existing XML style,
-e.g. `src/bitbots_vision/launch/depth.launch` (or in `bitbots_bringup`):
+`src/bitbots_depth/launch/depth.launch` (XML, like `bitbots_vision`):
 
 ```xml
 <launch>
     <arg name="sim" default="false" description="true: activates simulation time" />
 
-    <node pkg="depth_anything_3_ros2" exec="depth_anything_3_node" name="depth_anything_3" output="screen">
-        <param from="$(find-pkg-share bitbots_vision)/config/depth_anything_3.yaml" />
+    <node pkg="bitbots_depth" exec="depth_node" name="bitbots_depth" output="screen">
+        <param from="$(find-pkg-share bitbots_depth)/config/depthparams.yaml" />
         <param name="use_sim_time" value="$(var sim)" />
-        <remap from="~/image_raw" to="zed/zed_node/rgb/image_rect_color" />
-        <remap from="~/camera_info" to="zed/zed_node/rgb/camera_info" />
     </node>
 </launch>
 ```
 
-Notes:
+### 8.3 Wiring into the bringup
 
-- The input is `bgra8` (ZED and MuJoCo); the node converts to `rgb8` via
-  `cv_bridge`, which supports this conversion. Verify once.
-- BEST_EFFORT subscriber + RELIABLE ZED publisher is QoS compatible.
-- Consider placing outputs under a clear namespace (e.g. `depth/...`) via
-  remaps so they don't collide with ZED topics.
-
-### 6.3 Wire it into the bringup
-
-1. Add an arg `depth` (default `false` until performance is validated) to
+1. Add a `depth` arg (default `false` until performance is validated) to
    [bitbots_bringup/launch/vision.launch](src/bitbots_misc/bitbots_bringup/launch/vision.launch)
-   and include the new depth launch file when it is set, passing `sim`.
+   and include `bitbots_depth/launch/depth.launch` when it is set, passing
+   `sim`.
 2. Propagate the arg through
    [vision_standalone.launch](src/bitbots_misc/bitbots_bringup/launch/vision_standalone.launch),
    [highlevel.launch](src/bitbots_misc/bitbots_bringup/launch/highlevel.launch),
    [teamplayer.launch](src/bitbots_misc/bitbots_bringup/launch/teamplayer.launch),
    and `TEAMPLAYER_ARGS` in
    [mujoco_simulation.launch.py](src/bitbots_misc/bitbots_bringup/launch/mujoco_simulation.launch.py).
-3. Add `<exec_depend>depth_anything_3_ros2</exec_depend>` to the package that
-   owns the launch file
-   ([bitbots_bringup/package.xml](src/bitbots_misc/bitbots_bringup/package.xml)
-   and/or [bitbots_vision/package.xml](src/bitbots_vision/package.xml)).
-   Since the package only works in the new Pixi environment, consider a
-   conditional dependency like the existing
-   `condition="$IS_ROBOT != True"` pattern in `bitbots_bringup/package.xml`.
-4. Simulation: the depth node runs inside each robot's domain and consumes the
-   bridged camera topics, so the domain-bridge config in
-   [mujoco_simulation.launch.py](src/bitbots_misc/bitbots_bringup/launch/mujoco_simulation.launch.py)
-   needs no change unless depth should be visible in the main domain.
+3. Add `<exec_depend>bitbots_depth</exec_depend>` to
+   [bitbots_bringup/package.xml](src/bitbots_misc/bitbots_bringup/package.xml).
+   No condition is needed because the package builds everywhere. Only the
+   model is environment-specific.
+4. Simulation: the node runs in each robot's domain on the bridged camera
+   topics, so the domain-bridge config needs no change unless depth should be
+   visible in the main domain.
 
-### 6.4 Monitoring / recording (optional)
+### 8.4 Monitoring / recording (optional)
 
-- Add the depth (and optionally confidence) topics to
-  `TOPICS_TO_RECORD` in
+- Add `depth/image` (and optionally `depth/confidence`) to `TOPICS_TO_RECORD`
+  in
   [rosbag_record.launch.py](src/bitbots_misc/bitbots_bringup/launch/rosbag_record.launch.py)
-  if desired; mind the bag size (images are float32).
-- Add an image display to
+  if needed. Mind the bag size (float images).
+- Add the debug image to
   [monitoring.rviz](src/bitbots_misc/bitbots_bringup/config/monitoring.rviz) /
-  [monitoring_foxglove.json](src/bitbots_misc/bitbots_bringup/config/monitoring_foxglove.json)
-  for `depth_colored`.
+  [monitoring_foxglove.json](src/bitbots_misc/bitbots_bringup/config/monitoring_foxglove.json).
 
 ---
 
-## 7. Inference backend per platform
+## 9. Execution provider per platform
 
-| Platform | Backend in wrapper | What has to be done |
-|----------|-------------------|---------------------|
-| Dev PC with NVIDIA GPU (`linux-64`) | PyTorch `device: cuda` | CUDA-enabled conda-forge `pytorch` in the new feature, CUDA system requirement in Pixi. Easiest path for evaluation and simulation. |
-| Intel NUC (no NVIDIA GPU) | PyTorch `device: cpu` only | Works functionally but is expected to be far from real-time and competes with the RF-DETR vision and motion for CPU. Not recommended for games; consider D6 (ONNX Runtime + WebGPU/OpenVINO). |
-| Jetson (`linux-aarch64`) | Shared-memory client + host TensorRT service | The wrapper's TRT service (`scripts/trt_inference_service_shm.py`, `scripts/build_tensorrt_engine.py`) runs **outside** the Pixi env with JetPack's `tensorrt` + `pycuda`. Needs: ONNX export of DA3 and engine build on the robot, a systemd/tmux service or launch `ExecuteProcess` to start it, `use_shared_memory: true`, and the PyTorch stack is then not needed on the robot at all. Check whether conda-forge `tensorrt`/`pycuda` builds for aarch64 + JetPack could replace the host install. Ansible changes may be required. |
+| Platform | Today (`libonnxruntime-webgpu`) | Possible improvement |
+|----------|---------------------------------|----------------------|
+| Dev PC, NVIDIA GPU (`linux-64`) | WebGPU over Vulkan; CPU fallback | Sufficient for simulation and example images. Dev-PC timings are **not** representative of the Jetson. |
+| Jetson (`linux-aarch64`) | WebGPU over Vulkan (Jetson Vulkan driver); CPU fallback | ONNX Runtime with the TensorRT (or CUDA) provider built against the Jetson's JetPack/TensorRT, shipped e.g. as an additional `conda-misc` package or via the robot setup. `bitbots_vision` would benefit too. Needs a separate team decision. |
 
----
+Notes:
 
-## 8. Using the depth output downstream (depends on D2)
-
-The wrapper only publishes depth images; nothing in the stack consumes them
-yet. Possible consumers and the work they imply:
-
-- **Distances to detected objects** (balls, robots, obstacles): sample depth
-  at detection boxes from `bitbots_vision` and combine with `camera_info`.
-  Today, 3D positions come from inverse perspective mapping (`soccer_ipm`,
-  [ipm.launch](src/bitbots_misc/bitbots_ipm/launch/ipm.launch)), which assumes
-  objects on the ground plane. DA3 relative depth needs metric scale – either
-  a metric model (licence!) or scale fitting against IPM on ground pixels.
-- **Obstacle avoidance / path planning**: convert depth + `camera_info` into a
-  point cloud (e.g. `depth_image_proc` – new dependency) and feed it to the
-  planner in `bitbots_navigation`.
-- **Interface changes**: if new messages are needed, add them to
-  [bitbots_msgs](src/bitbots_msgs) and rebuild consumers.
-
-Keep this out of the first integration step; first get the node running
-and measured.
+- RF-DETR and DA3 share one Jetson GPU. Measure both together (§11) and use
+  the node's rate limiting if needed.
+- If the TensorRT provider is adopted, enable its engine cache in a
+  robot-local directory. Engines are device- and TensorRT-version-specific:
+  build them on the robot and never commit them.
+- Check WebGPU fp16 support on the Jetson before relying on fp16 exports.
+  `RfdetrHandler` already handles session creation failures with a CPU
+  retry.
 
 ---
 
-## 9. Alternative worth evaluating (D6)
+## 10. Metric depth and downstream use (D2)
 
-The robot software already runs neural networks through ONNX Runtime with
-TensorRT/CUDA/WebGPU/CPU providers (`bitbots_vision`), packaged models from
-the `conda-misc` channel, and no PyTorch. Exporting DA3-Small to ONNX (the
-wrapper's `scripts/build_tensorrt_engine.py` already contains an ONNX export
-step) and adding an ONNX Runtime backend – either upstream in the wrapper or
-in our own node – would:
+### 10.1 Metric model
 
-- avoid the large PyTorch/DA3 dependency tree on robots,
-- reuse the existing execution-provider fallback chain and robot drivers,
-- work on both NUC (WebGPU/Vulkan) and Jetson (TensorRT).
+`DA3METRIC-LARGE` (Apache 2.0) predicts metric depth given the focal length.
+The node takes `fx`/`fy` from `camera_info`, scales them to the model input
+resolution, and applies the conversion defined in `model_config.yaml`. The
+parity check in §4 must confirm which resolution the focal length refers to.
+Its cost is roughly that of DA3-Large, so it is only an option if Large fits
+the Jetson budget (D3).
 
-The GerdsenAI wrapper can still be used as-is on developer machines for
-evaluation.
+### 10.2 Scale recovery for relative models (Small / Base / Large)
+
+The main-series models predict depth up to an unknown scale. The camera pose
+relative to the ground plane is known from TF (this is what IPM uses), so:
+
+1. Select pixels that are known to lie on the ground plane. Line-mask pixels
+   from `bitbots_vision` (`line_mask_in_image`) are a good choice; field
+   pixels outside detection boxes are an alternative.
+2. Compute their expected metric depth by ray-plane intersection, using
+   `camera_info` and the TF camera pose at the image stamp.
+3. Estimate a robust per-frame scale (e.g. median ratio) and optionally
+   smooth it over time. Reject the frame if too few ground pixels are
+   available or the camera looks too far upward.
+4. Verify experimentally that a pure scale is sufficient (no shift term)
+   for each variant.
+
+Both 10.1 and 10.2 should be implemented behind the `relative`/`metric`
+output kind from `model_config.yaml`, so the variant can be switched by
+changing the model package only.
+
+### 10.3 Object distances (first downstream consumer)
+
+- Synchronise `depth/image` with `balls_in_image` / `robots_in_image` by
+  exact stamp (all share the input image header).
+- Sample a robust depth inside each detection (e.g. median of the central
+  region or the lower part of the box). Back-project with `camera_info` and
+  transform into the target frame via TF.
+- Publish `soccer_vision_3d_msgs`, as `soccer_ipm` does, so that the world
+  model and behaviour can consume depth-based positions without new message
+  types.
+- To be decided: replace IPM-based positions, fuse both, or use depth only
+  where IPM's ground-plane assumption fails (occluded feet, airborne ball,
+  objects far from the plane). Start by publishing on separate topics and
+  comparing.
+
+### 10.4 Obstacles (later)
+
+Convert depth + `camera_info` into a point cloud or a ground-projected
+occupancy for `bitbots_navigation` path planning. `depth_image_proc` would be
+a new dependency, so it needs confirmation per [AGENTS.md](AGENTS.md#dependencies).
+This is out of scope for the first step.
+
+Localisation (`bitbots_localization`) is not changed (D2).
 
 ---
 
-## 10. Documentation
+## 11. Benchmark and model selection (D3)
 
-- Add a section to the vision docs
-  ([src/bitbots_vision/docs/manual/](src/bitbots_vision/docs/manual)) or the
-  general manual describing the depth node, its launch arg, the Pixi
-  environment, and the model package.
-- Update [src/bitbots_vision/README.md](src/bitbots_vision/README.md) /
-  bringup docs if a new launch argument is added.
-- Note the model licence in the docs.
+Run for each candidate (`DA3-SMALL`, `DA3-BASE`, `DA3-LARGE-1.1`,
+`DA3METRIC-LARGE`), each export resolution, and fp32/fp16:
 
----
-
-## 11. Validation checklist
-
-1. `pixi install -e <new env>` solves on `linux-64` (and `linux-aarch64` if
-   targeted).
-2. `pixi run -e default build` and `pixi run -e default test` still pass
-   (package skipped in tests as described in §4.4).
-3. `pixi run -e <new env> build --packages-select depth_anything_3_ros2`.
-4. `pixi run -e <new env> python -c "import depth_anything_3_ros2.depth_anything_3_node"`
-   succeeds; model loads from the local model package with
-   `HF_HUB_OFFLINE=1`.
-5. Offline test: play a rosbag containing
-   `zed/zed_node/rgb/image_rect_color` + `camera_info` and run the depth
-   launch file; check `ros2 topic hz` on the depth topic and
-   `log_inference_time: true` output.
-6. Simulation: `ros2 launch bitbots_bringup mujoco_simulation.launch.py` with
-   `depth:=true`; verify `use_sim_time` and stamps/frames on output.
-7. Robot (only with explicit approval, no motion needed): run
-   `vision_standalone.launch depth:=true`, measure CPU/GPU load with
-   `system_monitor` while the regular vision runs, and confirm the RF-DETR
-   vision frame rate does not degrade unacceptably.
-8. `pixi run -e default format` and review the diff.
+1. **Dev PC:** functional check in MuJoCo and on rosbags. Use the
+   simulation's ground-truth ball/robot positions to measure distance error
+   (note the sim-to-real gap).
+2. **Jetson** (only with explicit approval; no motion needed): run
+   `vision_standalone.launch depth:=true` and record
+   - DA3 latency and achieved rate,
+   - RF-DETR rate with and without DA3,
+   - GPU/CPU load and memory through `system_monitor`,
+   - distance error against measured real distances on recorded scenes.
+3. Choose the variant with the best accuracy that keeps the RF-DETR rate
+   acceptable. Then pin its model package in the `depth` feature and record
+   the results (without hard-coded numbers in code comments) in the docs.
 
 ---
 
-## 12. Summary of concrete changes
+## 12. Documentation
+
+- `src/bitbots_depth/README.md` and a manual page (e.g.
+  `src/bitbots_depth/docs/manual/`) describing the node, the topics, the model
+  directory layout, metric vs. relative handling, the `depth` Pixi
+  environment, and the export workflow (with a link to the fork).
+- State each model's licence. CC BY-NC 4.0 variants are acceptable for this
+  project but must not be redistributed for commercial use.
+- Document the new `depth` launch arg in the bringup docs.
+
+---
+
+## 13. Validation checklist
+
+1. Fork: ONNX export plus parity check pass for the candidate variants.
+2. `pixi install -e depth` solves on `linux-64` and `linux-aarch64`.
+3. `pixi run -e default build --packages-select bitbots_depth` and
+   `pixi run -e default test --packages-select bitbots_depth` pass without
+   a model installed.
+4. `pixi run -e depth test --packages-select bitbots_depth` passes with the
+   model installed.
+5. Offline: play a rosbag with the ZED image and `camera_info` topics, run
+   `depth.launch`, then check `ros2 topic hz`, stamps and frames on
+   `depth/image`, and the active execution provider in the log.
+6. Simulation: `ros2 launch bitbots_bringup mujoco_simulation.launch.py`
+   with `depth:=true`. Verify `use_sim_time` and compare object distances
+   with ground truth.
+7. Jetson: benchmark as in §11 (explicit approval required).
+8. `pixi run -e default build` and `pixi run -e default test` still pass for
+   the whole workspace.
+9. `pixi run -e default format`, then review the diff.
+
+---
+
+## 14. Summary of concrete changes
 
 | File / location | Change |
 |-----------------|--------|
-| `src/lib/depth_anything_3_ros2/` (new) | Imported wrapper (+ `.gitrepo`), patched per §3.2 (preferably via fork/upstream PR) |
-| [pixi.toml](pixi.toml) / `pixi.lock` | New `depth_anything` feature + environment, `HF_HUB_OFFLINE` activation env, test skip entry (after team approval) |
-| `conda-misc` channel | New model weight package (DA3-Small) |
-| `src/bitbots_vision/config/depth_anything_3.yaml` (new) | Canonical parameters |
-| `src/bitbots_vision/launch/depth.launch` (new) | Node with `use_sim_time`, remaps to ZED topics |
-| [bitbots_bringup launch files](src/bitbots_misc/bitbots_bringup/launch) | `depth` arg propagated through vision/highlevel/teamplayer/standalone/MuJoCo launches |
-| `package.xml` of the launching package | `exec_depend` on `depth_anything_3_ros2` |
-| [rosbag_record.launch.py](src/bitbots_misc/bitbots_bringup/launch/rosbag_record.launch.py), monitoring configs | Optional topics/visualisation |
-| Vision / manual docs | Usage, environment, licence |
-| Ansible / robot setup (only for Jetson TRT path) | Host TensorRT service and engine build |
+| Fork of GerdsenAI wrapper (separate repo) | ONNX export + parity tooling; PyTorch lives only there |
+| `conda-misc` channel | `bitbots_model_da3_*` packages (ONNX + `model_config.yaml` + licence) |
+| `src/bitbots_depth/` (new) | C++ node, processing lib, parameters, launch, config, tests, docs |
+| [pixi.toml](pixi.toml) / `pixi.lock` | New `depth` feature (model packages) + `depth` environment; later added to the robot environment (after team approval) |
+| [bitbots_bringup launch files](src/bitbots_misc/bitbots_bringup/launch) | `depth` arg propagated through vision/standalone/highlevel/teamplayer/MuJoCo launches |
+| [bitbots_bringup/package.xml](src/bitbots_misc/bitbots_bringup/package.xml) | `exec_depend` on `bitbots_depth` |
+| [rosbag_record.launch.py](src/bitbots_misc/bitbots_bringup/launch/rosbag_record.launch.py), monitoring configs | Optional topics / visualisation |
+| Robot setup (only if adopted) | ONNX Runtime build with TensorRT provider for Jetson (§9) |
+
+---
+
+## 15. Remaining open questions
+
+1. Pixi layout for the robot during evaluation: add `depth` to `robot` or
+   create `robot_depth`? (§7)
+2. Jetson: stay with WebGPU, or build ONNX Runtime with the TensorRT provider?
+   (§9)
+3. Object distances: computed in `bitbots_depth` or in a separate node, and
+   replace, fuse with, or complement `soccer_ipm`? (§10.3)
+4. Name and owner of the fork, and who builds and uploads the `conda-misc`
+   model packages. (§4, §5)
+5. Export resolution(s) and whether DA3 runs on every frame or rate-limited.
+   (§4, §6.2, §11)

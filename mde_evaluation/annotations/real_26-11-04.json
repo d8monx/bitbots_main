@@ -1,0 +1,386 @@
+{
+ "_comment": [
+  "Tape measurements of 04.11.2026 (with Pär). The robot with the camera stood at the same spot in all mde_s1_* bags.",
+  "All tape distances start at the camera robot's toe (confirmed by Damon 11.11.). toe_offset = how far the toe is",
+  "in front of base_footprint: 0.099 m, read from TF (front corners of both soles, x = 0.097-0.102 m in all three",
+  "sessions). The evaluation reports every distance from base_footprint, like the Bit-Bots IPM, so truth = tape + toe_offset.",
+  "Ball distances go to the ball centre (ball on a floor mark), robot distances to the other robot's toe.",
+  "Ball 2 m left: direct line to the ball. Objects are static within a bag (also in kopfbewegung, only the head moves),",
+  "except the referee scene, where the ball is lifted for a while (frames 3 and 4: ball in the air, about above its mark).",
+  "Shapes: circle = [cx, cy, r] in pixels (672x376), marked by Claude and checked visually; mask = image painted by Damon",
+  "Shapes: mask = image painted by the group (blue = robot 2 m, red = robot behind, green = ball); circle = [cx, cy, r]",
+  "marked by Claude where no painting exists (checked visually). 'frames' = frame indices a shape is valid for (default: all)."
+ ],
+ "toe_offset": 0.099,
+ "wall": 4.775,
+ "objects": {
+  "mde_s1_performance_1m": [
+   {
+    "kind": "ball",
+    "tape": 1.0,
+    "mask": "masks/mde_s1_performance_1m_0000.png",
+    "color": "green"
+   }
+  ],
+  "mde_s1_performance_2m": [
+   {
+    "kind": "ball",
+    "tape": 2.0,
+    "mask": "masks/mde_s1_performance_2m_0000.png",
+    "color": "green"
+   }
+  ],
+  "mde_s1_performance_3m": [
+   {
+    "kind": "ball",
+    "tape": 3.0,
+    "mask": "masks/mde_s1_performance_3m_0000.png",
+    "color": "green"
+   }
+  ],
+  "mde_s1_performance_45m": [
+   {
+    "kind": "ball",
+    "tape": 4.5,
+    "mask": "masks/mde_s1_performance_45m_0000.png",
+    "color": "green"
+   }
+  ],
+  "mde_s1_performance_80cm": [
+   {
+    "kind": "ball",
+    "tape": 0.8,
+    "mask": "masks/mde_s1_performance_80cm_0000.png",
+    "color": "green"
+   }
+  ],
+  "mde_s1_performance_30cm": [
+   {
+    "kind": "ball",
+    "tape": 0.3,
+    "mask": "masks/mde_s1_performance_30cm_0000.png",
+    "color": "green"
+   }
+  ],
+  "mde_s1_performance_2m_left": [
+   {
+    "kind": "ball",
+    "tape": 2.0,
+    "mask": "masks/mde_s1_performance_2m_left_0000.png",
+    "color": "green"
+   }
+  ],
+  "mde_s1_neural_2m": [
+   {
+    "kind": "ball",
+    "tape": 2.0,
+    "mask": "masks/mde_s1_neural_2m_0000.png",
+    "color": "green"
+   }
+  ],
+  "mde_s1_neural_30cm": [
+   {
+    "kind": "ball",
+    "tape": 0.3,
+    "mask": "masks/mde_s1_neural_30cm_0000.png",
+    "color": "green"
+   }
+  ],
+  "mde_s1_neural_45m": [
+   {
+    "kind": "ball",
+    "tape": 4.5,
+    "mask": "masks/mde_s1_neural_45m_0000.png",
+    "color": "green"
+   }
+  ],
+  "mde_s1_neural_plus_2m": [
+   {
+    "kind": "ball",
+    "tape": 2.0,
+    "mask": "masks/mde_s1_neural_plus_2m_0000.png",
+    "color": "green"
+   }
+  ],
+  "mde_s1_neural_plus_30m": [
+   {
+    "kind": "ball",
+    "tape": 0.3,
+    "mask": "masks/mde_s1_neural_plus_30m_0000.png",
+    "color": "green"
+   }
+  ],
+  "mde_s1_neural_plus_45m": [
+   {
+    "kind": "ball",
+    "tape": 4.5,
+    "circle": [
+     368,
+     138,
+     5
+    ]
+   }
+  ],
+  "mde_s1_performance_offen": [
+   {
+    "kind": "ball",
+    "tape": 2.0,
+    "circle": [
+     540,
+     220,
+     14
+    ]
+   },
+   {
+    "kind": "robot",
+    "tape": 2.0,
+    "mask": "masks/mde_s1_performance_offen_0000.png",
+    "color": "blue"
+   },
+   {
+    "kind": "robot",
+    "tape": 3.0,
+    "mask": "masks/mde_s1_performance_offen_0000.png",
+    "color": "red"
+   }
+  ],
+  "mde_s1_performance_verdeckt": [
+   {
+    "kind": "ball",
+    "tape": 2.0,
+    "mask": "masks/mde_s1_performance_verdeckt_0000_nur_ball.png",
+    "color": "green"
+   },
+   {
+    "kind": "robot",
+    "tape": 2.0,
+    "mask": "masks/mde_s1_performance_verdeckt_0000.png",
+    "color": "red",
+    "note_colors": "colours swapped in this painting: red = front robot (2 m), blue = back robot (3 m)"
+   },
+   {
+    "kind": "robot",
+    "tape": 3.0,
+    "mask": "masks/mde_s1_performance_verdeckt_0000.png",
+    "color": "blue",
+    "note": "half hidden"
+   }
+  ],
+  "mde_s1_performance_ball_vorne": [
+   {
+    "kind": "ball",
+    "tape": 1.75,
+    "mask": "masks/mde_s1_performance_ball_vorne_0000.png",
+    "color": "green"
+   },
+   {
+    "kind": "robot",
+    "tape": 2.0,
+    "mask": "masks/mde_s1_performance_ball_vorne_0000.png",
+    "color": "blue"
+   },
+   {
+    "kind": "robot",
+    "tape": 2.3,
+    "mask": "masks/mde_s1_performance_ball_vorne_0000.png",
+    "color": "red"
+   }
+  ],
+  "mde_s1_performance_ball_hinten": [
+   {
+    "kind": "ball",
+    "tape": 2.35,
+    "mask": "masks/mde_s1_performance_ball_hinten_0000.png",
+    "color": "green",
+    "note": "mostly hidden"
+   },
+   {
+    "kind": "robot",
+    "tape": 2.0,
+    "mask": "masks/mde_s1_performance_ball_hinten_0000.png",
+    "color": "blue"
+   },
+   {
+    "kind": "robot",
+    "tape": 2.3,
+    "mask": "masks/mde_s1_performance_ball_hinten_0000.png",
+    "color": "red"
+   }
+  ],
+  "mde_s1_performance_mensch": [
+   {
+    "kind": "ball",
+    "tape": 1.5,
+    "circle": [
+     318,
+     229,
+     13
+    ],
+    "frames": [
+     0
+    ]
+   },
+   {
+    "kind": "ball",
+    "tape": 1.5,
+    "circle": [
+     318,
+     225,
+     13
+    ],
+    "frames": [
+     1
+    ]
+   },
+   {
+    "kind": "ball",
+    "tape": 1.5,
+    "circle": [
+     309,
+     135,
+     13
+    ],
+    "frames": [
+     3
+    ],
+    "note": "in the air"
+   },
+   {
+    "kind": "ball",
+    "tape": 1.5,
+    "circle": [
+     313,
+     127,
+     13
+    ],
+    "frames": [
+     4
+    ],
+    "note": "in the air"
+   },
+   {
+    "kind": "ball",
+    "tape": 1.5,
+    "circle": [
+     312,
+     227,
+     13
+    ],
+    "frames": [
+     7
+    ]
+   },
+   {
+    "kind": "ball",
+    "tape": 1.5,
+    "circle": [
+     312,
+     229,
+     13
+    ],
+    "frames": [
+     8
+    ]
+   },
+   {
+    "kind": "robot",
+    "tape": 2.0,
+    "mask": "masks/mde_s1_performance_ball_hinten_0000.png",
+    "color": "blue",
+    "frames": [
+     0,
+     1,
+     7,
+     8
+    ]
+   },
+   {
+    "kind": "robot",
+    "tape": 2.3,
+    "mask": "masks/mde_s1_performance_ball_hinten_0000.png",
+    "color": "red",
+    "frames": [
+     0,
+     1,
+     7,
+     8
+    ]
+   }
+  ],
+  "mde_s1_performance_kopfbewegung": [
+   {
+    "kind": "ball",
+    "tape": 0.5,
+    "mask": "masks/mde_s1_performance_kopfbewegung_0000.png",
+    "color": "green",
+    "frames": [
+     0
+    ]
+   },
+   {
+    "kind": "ball",
+    "tape": 0.5,
+    "mask": "masks/mde_s1_performance_kopfbewegung_0002.png",
+    "color": "green",
+    "frames": [
+     2
+    ]
+   },
+   {
+    "kind": "ball",
+    "tape": 0.5,
+    "mask": "masks/mde_s1_performance_kopfbewegung_0004.png",
+    "color": "green",
+    "frames": [
+     4
+    ]
+   },
+   {
+    "kind": "robot",
+    "tape": 2.0,
+    "mask": "masks/mde_s1_performance_kopfbewegung_0001.png",
+    "color": "blue",
+    "frames": [
+     1
+    ]
+   },
+   {
+    "kind": "robot",
+    "tape": 2.3,
+    "mask": "masks/mde_s1_performance_kopfbewegung_0001.png",
+    "color": "red",
+    "frames": [
+     1
+    ]
+   },
+   {
+    "kind": "robot",
+    "tape": 2.0,
+    "mask": "masks/mde_s1_performance_kopfbewegung_0003.png",
+    "color": "blue",
+    "frames": [
+     3
+    ]
+   },
+   {
+    "kind": "robot",
+    "tape": 2.3,
+    "mask": "masks/mde_s1_performance_kopfbewegung_0003.png",
+    "color": "red",
+    "frames": [
+     3
+    ]
+   },
+   {
+    "kind": "robot",
+    "tape": 2.3,
+    "mask": "masks/mde_s1_performance_kopfbewegung_0005.png",
+    "color": "red",
+    "frames": [
+     5
+    ],
+    "note": "at image edge"
+   }
+  ]
+ }
+}

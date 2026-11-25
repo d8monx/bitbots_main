@@ -103,7 +103,8 @@ def measurements_sheet(ws):
     for r in csv.DictReader(open(RES / "objects.csv")):
         per[r["bag"], int(r["object"])].append(r)
     frames = {(d["bag"], d["file"]): d for d in load_frames()}
-    header = ["Bild (Objekt umrandet)", "Messung", "Nr.", "Objekt", "Wahr (m)"]
+    header = ["Bild (Objekt umrandet)", "Messung", "Nr.", "Objekt", "Maßband ab Fußspitze (m)",
+              "Wahr ab Robotermitte (m)"]
     header += [n for name in ROW_METHODS.values() for n in (name, "Fehler")] + ["Bilder", "Tiefenkarten"]
     ws.append(header)
     for cell in ws[1]:
@@ -113,7 +114,8 @@ def measurements_sheet(ws):
     for (bag, i_obj), rows in sorted(per.items(), key=lambda kv: (float(kv[1][0]["truth"]), kv[0])):
         truth = float(rows[0]["truth"])
         short = bag.removeprefix("mde_s1_")
-        cells = [None, short, i_obj + 1, display(rows[0]["label"], rows[0]["note"]), round(truth, 2)]
+        kind = "Ball" if rows[0]["kind"] == "ball" else "Roboter"
+        cells = [None, short, i_obj + 1, kind + NOTE[rows[0]["note"]], float(rows[0]["tape"]), round(truth, 2)]
         n_frames = len({r["file"] for r in rows})
         for m in ROW_METHODS:
             ests = [float(r["estimate"]) for r in rows if r["method"] == m and r["estimate"] not in ("", "nan")]
@@ -124,6 +126,8 @@ def measurements_sheet(ws):
         for c, name in enumerate(header, start=1):
             if name == "Fehler":
                 ws.cell(row, c).number_format = "+0.0%;-0.0%;0.0%"
+            elif 5 <= c and name != "Bilder" and c < len(header):
+                ws.cell(row, c).number_format = "0.00"  # distances in metres
             ws.cell(row, c).alignment = Alignment(vertical="center", wrap_text=True)
         link = ws.cell(row, len(header))
         idx = int(min(r["file"] for r in rows).split("_")[1].split(".")[0])
@@ -144,7 +148,7 @@ def measurements_sheet(ws):
     ws.column_dimensions["B"].width = 18
     ws.column_dimensions["D"].width = 22
     ws.freeze_panes = "B2"
-    ws.cell(row + 1, 2, "Wahr = Maßband + 9,9 cm, waagerecht ab base_footprint. Werte = Median über die Bilder der "
+    ws.cell(row + 1, 2, "Wahr ab Robotermitte = Maßband + 9,9 cm: gemessen wurde ab der Fußspitze, verglichen wird ab base_footprint (Punkt zwischen den Füßen, 9,9 cm hinter der Fußspitze), wie im IPM der Bit-Bots. Werte = Median über die Bilder der "
                         "Messung. Fehler: + = zu weit, − = zu nah, grün = gut, rot = 15 % oder mehr daneben. "
                         "skaliert = DA3 über den Boden 0,5–2,5 m vor dem Roboter auf Meter gebracht, roh = Metric-Large "
                         "direkt aus dem Modell (Small und Base gibt es nur skaliert, sie liefern ohne Skalierung keine "

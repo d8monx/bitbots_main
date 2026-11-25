@@ -43,6 +43,7 @@ TABLE_METHODS = ["IPM", "ZED", "Small skaliert", "Base skaliert", "Metric-Large 
 # Extra frames that get their own file (<bag>_bild<N>.xlsx): in 'mensch' a person moves the ball,
 # frame 3 shows it held in the air
 EXTRA_FRAMES = {"mde_s1_performance_mensch": (1, 2, 3, 7)}
+NOTE = {"mostly hidden": " (fast verdeckt)", "half hidden": " (halb verdeckt)", "in the air": " (in der Luft)"}
 TABLE_NAMES = ["IPM (Bit-Bots)", "ZED", "DA3 Small skaliert", "DA3 Base skaliert", "DA3 Metric-Large skaliert",
                "DA3 Metric-Large roh"]
 
@@ -90,9 +91,10 @@ def measurement_sheet(ws, d, rows):
     ws.title = "Messung"
     ws["A1"] = f"Messung {d['bag'].removeprefix('mde_s1_')}, Bild {d['file']} (Aufnahme 04.11.)"
     ws["A1"].font = Font(bold=True, size=13)
-    ws["A2"] = ("Abstände waagerecht ab base_footprint in m; Wahr = Maßband + 9,9 cm. Fehler in %: + = zu weit, "
+    ws["A2"] = ("Abstände waagerecht in m. Wahr ab Robotermitte = Maßband (ab Fußspitze) + 9,9 cm, gezählt ab "
+                "base_footprint wie im IPM der Bit-Bots. Fehler in %: + = zu weit, "
                 "− = zu nah. Die Tiefenblätter zeigen z-Tiefe pro Pixel (Farbskala 0,3 m blau bis 6 m rot).")
-    header = ["Nr.", "Objekt", "Wahr"] + [n for name in TABLE_NAMES for n in (name, "Fehler")]
+    header = ["Nr.", "Objekt", "Maßband ab Fußspitze", "Wahr ab Robotermitte"] + [n for name in TABLE_NAMES for n in (name, "Fehler")]
     for c, v in enumerate(header, start=1):
         ws.cell(4, c, v).font = Font(bold=True)
     r = 5
@@ -102,7 +104,8 @@ def measurement_sheet(ws, d, rows):
             continue
         first = next(iter(est.values()))
         truth = float(first["truth"])
-        cells = [i_obj + 1, first["label"], round(truth, 2)]
+        kind = "Ball" if first["kind"] == "ball" else "Roboter"
+        cells = [i_obj + 1, kind + NOTE.get(first["note"], ""), float(first["tape"]), round(truth, 2)]
         for m in TABLE_METHODS:
             e = float(est[m]["estimate"]) if m in est and est[m]["estimate"] not in ("", "nan") else None
             cells += [round(e, 2) if e is not None else None, (e - truth) / truth if e is not None else None]

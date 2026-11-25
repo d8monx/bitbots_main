@@ -32,6 +32,7 @@ KMP_DUPLICATE_LIB_OK=TRUE .venv/bin/python scripts/eval_real.py          # DA3, 
 KMP_DUPLICATE_LIB_OK=TRUE .venv/bin/python scripts/pitch_sensitivity.py  # effect of a wrong head pitch on the ball distance
 KMP_DUPLICATE_LIB_OK=TRUE .venv/bin/python scripts/depth_to_excel.py     # one Excel per recording: image, distances, depth per pixel of ZED and DA3 -> results/tiefe_excel_26-11-04/
 KMP_DUPLICATE_LIB_OK=TRUE .venv/bin/python scripts/make_tables.py        # table for humans, one row per measurement with image -> results/real_26-11-04/Messungen.xlsx
+KMP_DUPLICATE_LIB_OK=TRUE .venv/bin/python scripts/explain_scaling.py    # picture: how DA3 is scaled with the floor, real numbers -> results/real_26-11-04/skalierung_erklaert.png
 ```
 
 `eval_real.py` computes the DA3 depth maps once and keeps them in `data/da3/`. The tape measurements and object markings are in `annotations/`.
